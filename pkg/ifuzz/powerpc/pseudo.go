@@ -26,6 +26,7 @@ func (insnset *InsnSet) initPseudo() {
 			return gen.text
 		},
 	})
+	/*
 	insnset.Insns = append(insnset.Insns, &Insn{
 		Name:   "PSEUDO_syscall",
 		Priv:   true,
@@ -46,6 +47,7 @@ func (insnset *InsnSet) initPseudo() {
 			return gen.text
 		},
 	})
+	*/
 	insnset.Insns = append(insnset.Insns, &Insn{
 		Name:   "PSEUDO_rtas",
 		Priv:   true,
@@ -81,7 +83,8 @@ func (gen *generator) sc(lev uint) {
 	imap := gen.imap
 
 	n := gen.r.Intn(9)
-	gen.byte(imap.ld64(3, uint64(gen.r.Intn(4+(MaxHcall-4)/4))))
+//	gen.byte(gen.imap.ld64(3, uint64(gen.r.Intn(4+(MAX_HCALL-4)/4))))
+	imap.ld64(3, 0x1C)
 	for i := 4; i < n+4; i++ {
 		gen.byte(imap.ld64(uint(i), gen.r.Uint64()))
 	}
