@@ -652,6 +652,11 @@ func (inst *instance) Diagnose(rep *report.Report) ([]byte, bool) {
 	// TODO: we don't need registers on all reports. Probably only relevant for "crashes"
 	// (NULL derefs, paging faults, etc), but is not useful for WARNING/BUG/HANG (?).
 	ret := []byte(fmt.Sprintf("%s Registers:\n", time.Now().Format("15:04:05 ")))
+
+	log.Logf(0, "stopping vm")
+	if _, err := inst.qmp(&qmpCommand{Execute: "stop"}); err != nil {
+		ret = append(ret, []byte(fmt.Sprintf("Failed to stop: %v\n", err))...)
+	}
 	for cpu := 0; cpu < inst.cfg.CPU; cpu++ {
 		regs, err := inst.hmp("info registers", cpu)
 		if err == nil {
