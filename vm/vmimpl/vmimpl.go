@@ -70,16 +70,17 @@ type Infoer interface {
 type Env struct {
 	// Unique name
 	// Can be used for VM name collision resolution if several pools share global name space.
-	Name     string
-	OS       string // target OS
-	Arch     string // target arch
-	Workdir  string
-	Image    string
-	SSHKey   string
-	SSHUser  string
-	Timeouts targets.Timeouts
-	Debug    bool
-	Config   []byte // json-serialized VM-type-specific config
+	Name      string
+	OS        string // target OS
+	Arch      string // target arch
+	Workdir   string
+	Image     string
+	SSHKey    string
+	SSHUser   string
+	KernelObj string
+	Timeouts  targets.Timeouts
+	Debug     bool
+	Config    []byte // json-serialized VM-type-specific config
 }
 
 // BootError is returned by Pool.Create when VM does not boot.

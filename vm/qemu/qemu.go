@@ -103,6 +103,7 @@ type instance struct {
 	merger      *vmimpl.OutputMerger
 	files       map[string]string
 	diagnose    chan bool
+	kernelObj   string
 }
 
 type archConfig struct {
@@ -337,6 +338,7 @@ func (pool *Pool) ctor(workdir, sshkey, sshuser string, index int) (vmimpl.Insta
 		sshkey:     sshkey,
 		sshuser:    sshuser,
 		diagnose:   make(chan bool, 1),
+		kernelObj:  pool.env.KernelObj,
 	}
 	if st, err := os.Stat(inst.image); err != nil && st.Size() == 0 {
 		// Some kernels may not need an image, however caller may still
@@ -667,6 +669,17 @@ func (inst *instance) Diagnose(rep *report.Report) ([]byte, bool) {
 			ret = append(ret, []byte(fmt.Sprintf("Failed reading regs: %v\n", err))...)
 		}
 	}
+	ret = append(ret, []byte(fmt.Sprintf("Printk from %v\n", inst.kernelObj+"/vmlinux"))...)
+	dump, err := inst.dumpPrintk()
+	if dump != nil {
+		ret = append(ret, dump...)
+	}
+	if err != nil {
+		ret = append(ret, []byte(fmt.Sprintf("Failed reading printk: %v\n", err))...)
+	}
+
+	log.Logf(0, "diagnose finished")
+
 	return ret, false
 }
 
