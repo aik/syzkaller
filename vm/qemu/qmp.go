@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+
+	"github.com/google/syzkaller/pkg/log"
 )
 
 type qmpCommand struct {
@@ -86,6 +88,7 @@ func (inst *instance) qmpRecv() (*qmpResponse, error) {
 				break
 			}
 		}
+		log.Logf(0, "skipping event: %+v", qe)
 	}
 
 	return qmp, err
