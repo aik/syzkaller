@@ -125,6 +125,8 @@ func ctorLinux(cfg *config) (Reporter, []string, error) {
 		"lowmemorykiller: Killing 'syz-fuzzer'",
 		"lowmemorykiller: Killing 'sshd'",
 		"INIT: PANIC: segmentation violation!",
+		"failed to create temp dir: mkdir syzkaller-testdir\\S+: no space left on device",
+		"page allocation failure: order:",
 	}
 	return ctx, suppressions, nil
 }
