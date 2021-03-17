@@ -45,6 +45,13 @@ static int kvmppc_define_rtas_kernel_token(int vmfd, unsigned token, const char*
 	return ioctl(vmfd, KVM_PPC_RTAS_DEFINE_TOKEN, &args);
 }
 
+static int kvmppc_get_one_reg(int cpufd, uint64_t id, void* target)
+{
+	struct kvm_one_reg reg = {.id = id, .addr = (uintptr_t)target};
+
+	return ioctl(cpufd, KVM_GET_ONE_REG, &reg);
+}
+
 // syz_kvm_setup_cpu(fd fd_kvmvm, cpufd fd_kvmcpu, usermem vma[24], text ptr[in, array[kvm_text, 1]], ntext len[text], flags flags[kvm_setup_flags_ppc64], opts ptr[in, array[kvm_setup_opt, 0:2]], nopt len[opts])
 static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4, volatile long a5, volatile long a6, volatile long a7)
 {
@@ -58,6 +65,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	const uintptr_t guest_mem_size = 256 << 20;
 	const uintptr_t guest_mem = 0;
 	unsigned long gpa_off = 0;
+	uint32_t debug_inst_opcode = 0;
 
 	(void)text_count; // fuzzer can spoof count and we need just 1 text, so ignore text_count
 	const void* text = 0;
@@ -80,6 +88,10 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (ioctl(cpufd, KVM_GET_SREGS, &sregs))
 		return -1;
 	if (ioctl(cpufd, KVM_GET_REGS, &regs))
+		return -1;
+
+	/* Use software breakpoint for forcing KVM exit */
+	if (kvmppc_get_one_reg(cpufd, KVM_REG_PPC_DEBUG_INST, &debug_inst_opcode))
 		return -1;
 
 	regs.msr = PPC_BIT(63); // MSR_SF == 64bit
@@ -155,6 +167,8 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	}
 
 	memcpy(host_mem + gpa_off, text, text_size);
+	memcpy(host_mem + gpa_off + text_size, &debug_inst_opcode, sizeof(debug_inst_opcode));
+	text_size += sizeof(debug_inst_opcode);
 
 	// The code generator produces little endian instructions so swap bytes here
 	if (!(flags & KVM_SETUP_PPC64_LE)) {
