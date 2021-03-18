@@ -677,6 +677,14 @@ func (inst *instance) Diagnose(rep *report.Report) ([]byte, bool) {
 	if err != nil {
 		ret = append(ret, []byte(fmt.Sprintf("Failed reading printk: %v\n", err))...)
 	}
+//	maps_file := fmt.Sprintf("/proc/%d/maps", inst.qemu.Process.Pid)
+//	dump, err = ioutil.ReadFile(maps_file)
+//	if dump != nil {
+//		ret = append(ret, dump...)
+//	}
+//	if err != nil {
+//		ret = append(ret, []byte(fmt.Sprintf("Failed reading %s: %v\n", maps_file, err))...)
+//	}
 
 	log.Logf(0, "diagnose finished")
 
