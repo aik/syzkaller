@@ -7321,11 +7321,22 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 #define BITS_PER_LONG 64
 #define PPC_BITLSHIFT(be) (BITS_PER_LONG - 1 - (be))
 #define PPC_BIT(bit) (1ULL << PPC_BITLSHIFT(bit))
+#define PPC_BITMASK(bs, be) ((PPC_BIT(bs) - PPC_BIT(be)) | PPC_BIT(bs))
+
+#define RADIX_PTE_INDEX_SIZE 5
+#define RADIX_PMD_INDEX_SIZE 9
+#define RADIX_PUD_INDEX_SIZE 9
+#define RADIX_PGD_INDEX_SIZE 13
 
 #define cpu_to_be32(x) __builtin_bswap32(x)
+#define cpu_to_be64(x) __builtin_bswap64(x)
 
+#define KVM_SETUP_PAGING (1 << 0)
 #define KVM_SETUP_PPC64_PR (1 << 3)
 #define KVM_SETUP_PPC64_LE (1 << 16)
+
+#define ALIGNUP(p, q) ((void*)(((unsigned long)(p) + (q)-1) & ~((q)-1)))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 struct kvm_text {
 	uintptr_t typ;
@@ -7353,6 +7364,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	const uintptr_t page_size = 16 << 10;
 	const uintptr_t guest_mem_size = 256 << 20;
 	const uintptr_t guest_mem = 0;
+	unsigned long gpa_off = 0;
 
 	(void)text_count;
 	const void* text = 0;
@@ -7385,9 +7397,73 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (flags & KVM_SETUP_PPC64_PR)
 		PPC_BIT(49);
 
-	memcpy(host_mem, text, text_size);
+	if (flags & KVM_SETUP_PAGING) {
+		/* Set up a page table */
+		struct prtb_entry {
+			__be64 prtb0;
+			__be64 prtb1;
+		} * process_tb;
+		unsigned long *pgd, *pud, *pmd, *pte, i;
+		struct kvm_ppc_mmuv3_cfg cfg = {
+		    .flags = KVM_PPC_MMUV3_RADIX | KVM_PPC_MMUV3_GTSE,
+		    .process_table = gpa_off,
+		};
+		const long max_shift = 52;
+		const unsigned long rts = (((max_shift - 31) >> 3) << PPC_BITLSHIFT(2)) |
+					  (((max_shift - 31) & 7) << PPC_BITLSHIFT(58));
+
+		regs.msr |= PPC_BIT(58) |
+			    PPC_BIT(59);
+
+		gpa_off += page_size;
+		process_tb = (struct prtb_entry*)(host_mem + gpa_off);
+		gpa_off += page_size;
+		pgd = (unsigned long*)(host_mem + gpa_off);
+		gpa_off += page_size;
+		pud = (unsigned long*)(host_mem + gpa_off);
+		gpa_off += page_size;
+		pmd = (unsigned long*)(host_mem + gpa_off);
+		gpa_off += page_size;
+		pte = (unsigned long*)(host_mem + gpa_off);
+		for (i = 0; i < MAX(1, (text_size / page_size) >> RADIX_PTE_INDEX_SIZE); ++i)
+			gpa_off += page_size;
+
+		memset(host_mem, 0, gpa_off);
+
+		regs.pc = gpa_off;
+
+		process_tb[0].prtb0 = cpu_to_be64(rts | (unsigned long)pgd | RADIX_PGD_INDEX_SIZE);
+
+		pgd[0] = cpu_to_be64(PPC_BIT(0) |
+				     ((unsigned long)pud & PPC_BITMASK(4, 55)) |
+				     RADIX_PUD_INDEX_SIZE);
+		pud[0] = cpu_to_be64(PPC_BIT(0) |
+				     ((unsigned long)pmd & PPC_BITMASK(4, 55)) |
+				     RADIX_PMD_INDEX_SIZE);
+		pmd[0] = cpu_to_be64(PPC_BIT(0) |
+				     ((unsigned long)pte & PPC_BITMASK(4, 55)) |
+				     RADIX_PTE_INDEX_SIZE);
+
+		for (i = 0; i < text_size / page_size; ++i, gpa_off += page_size) {
+			unsigned long *ptes, *ptep;
+
+			ptes = (unsigned long*)((char*)pte + (i >> RADIX_PTE_INDEX_SIZE) * page_size);
+
+			ptep = &ptes[i & ~(1UL << RADIX_PTE_INDEX_SIZE)];
+			*ptep = cpu_to_be64(PPC_BIT(0) |
+					    PPC_BIT(1) |
+					    (gpa_off & PPC_BITMASK(7, 51)) |
+					    PPC_BIT(61) |
+					    PPC_BIT(63));
+		}
+
+		if (ioctl(vmfd, KVM_PPC_CONFIGURE_V3_MMU, &cfg))
+			return -1;
+	}
+
+	memcpy(host_mem + gpa_off, text, text_size);
 	if (!(flags & KVM_SETUP_PPC64_LE)) {
-		uint32_t* p = (uint32_t*)host_mem;
+		uint32_t* p = (uint32_t*)(host_mem + gpa_off);
 
 		for (unsigned long i = 0; i < text_size / sizeof(*p); ++i)
 			p[i] = cpu_to_be32(p[i]);

@@ -299,7 +299,7 @@ define KVM_SETUP_VIRT86	(1<<4)
 define KVM_SETUP_SMM	(1<<5)
 define KVM_SETUP_VM	(1<<6)
 
-kvm_setup_flags_ppc64 = KVM_SETUP_PPC64_LE, KVM_SETUP_PPC64_PR
+kvm_setup_flags_ppc64 = KVM_SETUP_PPC64_LE, KVM_SETUP_PPC64_PR, KVM_SETUP_PAGING
 
 define KVM_SETUP_PPC64_PR	(1<<3) # Run with MSR_PR (==usermode==cpl3)
 define KVM_SETUP_PPC64_LE	(1<<16) # Little endian
