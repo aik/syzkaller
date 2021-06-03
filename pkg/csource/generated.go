@@ -7323,6 +7323,16 @@ struct kvm_text {
 	const void* text;
 	uintptr_t size;
 };
+
+static int kvmppc_define_rtas_kernel_token(int vmfd, unsigned token, const char* func)
+{
+	struct kvm_rtas_token_args args;
+
+	args.token = token;
+	strncpy(args.name, func, sizeof(args.name) - 1);
+
+	return ioctl(vmfd, KVM_PPC_RTAS_DEFINE_TOKEN, &args);
+}
 static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4, volatile long a5, volatile long a6, volatile long a7)
 {
 	const int vmfd = a0;
@@ -7374,6 +7384,15 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		};
 		ioctl(vmfd, KVM_ENABLE_CAP, &cap);
 	}
+
+	/*
+	 * Only a few of many RTAS calls are actually in the KVM and the rest
+	 * are handled in QEMU, enable the KVM handling for those 4 here.
+	 */
+	kvmppc_define_rtas_kernel_token(vmfd, 1, "ibm,set-xive");
+	kvmppc_define_rtas_kernel_token(vmfd, 2, "ibm,get-xive");
+	kvmppc_define_rtas_kernel_token(vmfd, 3, "ibm,int-on");
+	kvmppc_define_rtas_kernel_token(vmfd, 4, "ibm,int-off");
 
 	return 0;
 }
