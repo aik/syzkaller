@@ -9,6 +9,15 @@
 
 #include "kvm.h"
 
+#define BITS_PER_LONG 64
+#define PPC_BITLSHIFT(be) (BITS_PER_LONG - 1 - (be))
+#define PPC_BIT(bit) (1ULL << PPC_BITLSHIFT(bit))
+
+#define cpu_to_be32(x) __builtin_bswap32(x)
+
+#define KVM_SETUP_PPC64_PR (1 << 3)
+#define KVM_SETUP_PPC64_LE (1 << 16)
+
 struct kvm_text {
 	uintptr_t typ;
 	const void* text;
@@ -25,7 +34,7 @@ static int kvmppc_define_rtas_kernel_token(int vmfd, unsigned token, const char*
 	return ioctl(vmfd, KVM_PPC_RTAS_DEFINE_TOKEN, &args);
 }
 
-// syz_kvm_setup_cpu(fd fd_kvmvm, cpufd fd_kvmcpu, usermem vma[24], text ptr[in, array[kvm_text, 1]], ntext len[text], flags flags[kvm_setup_flags], opts ptr[in, array[kvm_setup_opt, 0:2]], nopt len[opts])
+// syz_kvm_setup_cpu(fd fd_kvmvm, cpufd fd_kvmcpu, usermem vma[24], text ptr[in, array[kvm_text, 1]], ntext len[text], flags flags[kvm_setup_flags_ppc64], opts ptr[in, array[kvm_setup_opt, 0:2]], nopt len[opts])
 static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4, volatile long a5, volatile long a6, volatile long a7)
 {
 	const int vmfd = a0;
@@ -33,7 +42,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	char* const host_mem = (char*)a2;
 	const struct kvm_text* const text_array_ptr = (struct kvm_text*)a3;
 	const uintptr_t text_count = a4;
-
+	const uintptr_t flags = a5;
 	const uintptr_t page_size = 16 << 10;
 	const uintptr_t guest_mem_size = 256 << 20;
 	const uintptr_t guest_mem = 0;
@@ -61,10 +70,23 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (ioctl(cpufd, KVM_GET_REGS, &regs))
 		return -1;
 
-	// PPC64LE, real mode: MSR_LE | MSR_SF
-	regs.msr = 1ULL | (1ULL << 63);
+	regs.msr = PPC_BIT(63); // MSR_SF == 64bit
+	if (flags & KVM_SETUP_PPC64_LE)
+		PPC_BIT(63); // Little endian
+
+	/* PR == "problem state" == non priveledged */
+	if (flags & KVM_SETUP_PPC64_PR)
+		PPC_BIT(49);
 
 	memcpy(host_mem, text, text_size);
+
+	// The code generator produces little endian instructions so swap bytes here
+	if (!(flags & KVM_SETUP_PPC64_LE)) {
+		uint32_t* p = (uint32_t*)host_mem;
+
+		for (unsigned long i = 0; i < text_size / sizeof(*p); ++i)
+			p[i] = cpu_to_be32(p[i]);
+	}
 
 	if (ioctl(cpufd, KVM_SET_SREGS, &sregs))
 		return -1;

@@ -7318,6 +7318,15 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 #define PREFIX_SIZE 0xba1d
 
 
+#define BITS_PER_LONG 64
+#define PPC_BITLSHIFT(be) (BITS_PER_LONG - 1 - (be))
+#define PPC_BIT(bit) (1ULL << PPC_BITLSHIFT(bit))
+
+#define cpu_to_be32(x) __builtin_bswap32(x)
+
+#define KVM_SETUP_PPC64_PR (1 << 3)
+#define KVM_SETUP_PPC64_LE (1 << 16)
+
 struct kvm_text {
 	uintptr_t typ;
 	const void* text;
@@ -7340,7 +7349,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	char* const host_mem = (char*)a2;
 	const struct kvm_text* const text_array_ptr = (struct kvm_text*)a3;
 	const uintptr_t text_count = a4;
-
+	const uintptr_t flags = a5;
 	const uintptr_t page_size = 16 << 10;
 	const uintptr_t guest_mem_size = 256 << 20;
 	const uintptr_t guest_mem = 0;
@@ -7367,9 +7376,22 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		return -1;
 	if (ioctl(cpufd, KVM_GET_REGS, &regs))
 		return -1;
-	regs.msr = 1ULL | (1ULL << 63);
+
+	regs.msr = PPC_BIT(63);
+	if (flags & KVM_SETUP_PPC64_LE)
+		PPC_BIT(63);
+
+	/* PR == "problem state" == non priveledged */
+	if (flags & KVM_SETUP_PPC64_PR)
+		PPC_BIT(49);
 
 	memcpy(host_mem, text, text_size);
+	if (!(flags & KVM_SETUP_PPC64_LE)) {
+		uint32_t* p = (uint32_t*)host_mem;
+
+		for (unsigned long i = 0; i < text_size / sizeof(*p); ++i)
+			p[i] = cpu_to_be32(p[i]);
+	}
 
 	if (ioctl(cpufd, KVM_SET_SREGS, &sregs))
 		return -1;
