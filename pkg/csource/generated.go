@@ -7317,6 +7317,35 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 #define NEXT_INSN $0xbadc0de
 #define PREFIX_SIZE 0xba1d
 
+#include "kvm_ppc64le.S.h"
+
+#define BOOK3S_INTERRUPT_SYSTEM_RESET 0x100
+#define BOOK3S_INTERRUPT_MACHINE_CHECK 0x200
+#define BOOK3S_INTERRUPT_DATA_STORAGE 0x300
+#define BOOK3S_INTERRUPT_DATA_SEGMENT 0x380
+#define BOOK3S_INTERRUPT_INST_STORAGE 0x400
+#define BOOK3S_INTERRUPT_INST_SEGMENT 0x480
+#define BOOK3S_INTERRUPT_EXTERNAL 0x500
+#define BOOK3S_INTERRUPT_EXTERNAL_HV 0x502
+#define BOOK3S_INTERRUPT_ALIGNMENT 0x600
+#define BOOK3S_INTERRUPT_PROGRAM 0x700
+#define BOOK3S_INTERRUPT_FP_UNAVAIL 0x800
+#define BOOK3S_INTERRUPT_DECREMENTER 0x900
+#define BOOK3S_INTERRUPT_HV_DECREMENTER 0x980
+#define BOOK3S_INTERRUPT_DOORBELL 0xa00
+#define BOOK3S_INTERRUPT_SYSCALL 0xc00
+#define BOOK3S_INTERRUPT_TRACE 0xd00
+#define BOOK3S_INTERRUPT_H_DATA_STORAGE 0xe00
+#define BOOK3S_INTERRUPT_H_INST_STORAGE 0xe20
+#define BOOK3S_INTERRUPT_H_EMUL_ASSIST 0xe40
+#define BOOK3S_INTERRUPT_HMI 0xe60
+#define BOOK3S_INTERRUPT_H_DOORBELL 0xe80
+#define BOOK3S_INTERRUPT_H_VIRT 0xea0
+#define BOOK3S_INTERRUPT_PERFMON 0xf00
+#define BOOK3S_INTERRUPT_ALTIVEC 0xf20
+#define BOOK3S_INTERRUPT_VSX 0xf40
+#define BOOK3S_INTERRUPT_FAC_UNAVAIL 0xf60
+#define BOOK3S_INTERRUPT_H_FAC_UNAVAIL 0xf80
 
 #define BITS_PER_LONG 64
 #define PPC_BITLSHIFT(be) (BITS_PER_LONG - 1 - (be))
@@ -7334,6 +7363,16 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 #define KVM_SETUP_PAGING (1 << 0)
 #define KVM_SETUP_PPC64_PR (1 << 3)
 #define KVM_SETUP_PPC64_LE (1 << 16)
+
+#define LPCR_UPRT PPC_BIT(41) /* Use Process Table */
+#define LPCR_EVIRT PPC_BIT(42) /* Enhanced Virtualisation */
+#define LPCR_HR PPC_BIT(43) /* Host Radix */
+
+#define KVM_REG_PPC_LPCR_64 (KVM_REG_PPC | KVM_REG_SIZE_U64 | 0xb5)
+
+#define PRTB_SIZE_SHIFT 12 /* log2((64 << 10) / 16) */
+#define PATB_GR (1UL << 63) /* guest uses radix; must match HR */
+#define PRTB_MASK 0x0ffffffffffff000UL
 
 #define ALIGNUP(p, q) ((void*)(((unsigned long)(p) + (q)-1) & ~((q)-1)))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
@@ -7360,6 +7399,21 @@ static int kvmppc_get_one_reg(int cpufd, uint64_t id, void* target)
 
 	return ioctl(cpufd, KVM_GET_ONE_REG, &reg);
 }
+
+static int kvmppc_set_one_reg(int cpufd, uint64_t id, void* target)
+{
+	struct kvm_one_reg reg = {.id = id, .addr = (uintptr_t)target};
+
+	return ioctl(cpufd, KVM_SET_ONE_REG, &reg);
+}
+
+static int kvm_vcpu_enable_cap(int cpufd, uint32_t capability)
+{
+	struct kvm_enable_cap cap = {
+	    .cap = capability,
+	};
+	return ioctl(cpufd, KVM_ENABLE_CAP, &cap);
+}
 static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4, volatile long a5, volatile long a6, volatile long a7)
 {
 	const int vmfd = a0;
@@ -7368,8 +7422,8 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	const struct kvm_text* const text_array_ptr = (struct kvm_text*)a3;
 	const uintptr_t text_count = a4;
 	const uintptr_t flags = a5;
-	const uintptr_t page_size = 16 << 10;
-	const uintptr_t guest_mem_size = 256 << 20;
+	const uintptr_t page_size = SYZ_PAGE_SIZE;
+	const uintptr_t guest_mem_size = 24 * page_size;
 	const uintptr_t guest_mem = 0;
 	unsigned long gpa_off = 0;
 	uint32_t debug_inst_opcode = 0;
@@ -7380,6 +7434,9 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	NONFAILING(text = text_array_ptr[0].text);
 	NONFAILING(text_size = text_array_ptr[0].size);
 
+	if (kvm_vcpu_enable_cap(cpufd, KVM_CAP_PPC_PAPR))
+		return -1;
+
 	for (uintptr_t i = 0; i < guest_mem_size / page_size; i++) {
 		struct kvm_userspace_memory_region memreg;
 		memreg.slot = i;
@@ -7387,7 +7444,9 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		memreg.guest_phys_addr = guest_mem + i * page_size;
 		memreg.memory_size = page_size;
 		memreg.userspace_addr = (uintptr_t)host_mem + i * page_size;
-		ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &memreg);
+		if (ioctl(vmfd, KVM_SET_USER_MEMORY_REGION, &memreg)) {
+			return -1;
+		}
 	}
 
 	struct kvm_regs regs;
@@ -7397,29 +7456,64 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (ioctl(cpufd, KVM_GET_REGS, &regs))
 		return -1;
 
-	/* Use software breakpoint for forcing KVM exit */
+	regs.msr = PPC_BIT(0);
+	if (flags & KVM_SETUP_PPC64_LE)
+		regs.msr |= PPC_BIT(63);
+	if (flags & KVM_SETUP_PPC64_PR)
+		regs.msr |= PPC_BIT(49);
 	if (kvmppc_get_one_reg(cpufd, KVM_REG_PPC_DEBUG_INST, &debug_inst_opcode))
 		return -1;
 
-	regs.msr = PPC_BIT(63);
-	if (flags & KVM_SETUP_PPC64_LE)
-		PPC_BIT(63);
+#define VEC(x) (*((uint32_t*)(host_mem + (x))))
+	VEC(BOOK3S_INTERRUPT_SYSTEM_RESET) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_MACHINE_CHECK) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_DATA_STORAGE) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_DATA_SEGMENT) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_INST_STORAGE) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_INST_SEGMENT) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_EXTERNAL) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_EXTERNAL_HV) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_ALIGNMENT) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_PROGRAM) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_FP_UNAVAIL) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_DECREMENTER) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_HV_DECREMENTER) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_DOORBELL) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_SYSCALL) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_TRACE) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_H_DATA_STORAGE) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_H_INST_STORAGE) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_H_EMUL_ASSIST) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_HMI) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_H_DOORBELL) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_H_VIRT) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_PERFMON) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_ALTIVEC) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_VSX) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_FAC_UNAVAIL) = debug_inst_opcode;
+	VEC(BOOK3S_INTERRUPT_H_FAC_UNAVAIL) = debug_inst_opcode;
 
-	/* PR == "problem state" == non priveledged */
-	if (flags & KVM_SETUP_PPC64_PR)
-		PPC_BIT(49);
+	struct kvm_guest_debug dbg = {0};
+	dbg.control = KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP;
 
+	if (ioctl(cpufd, KVM_SET_GUEST_DEBUG, &dbg))
+		return -1;
+	gpa_off = 128 << 10;
 	if (flags & KVM_SETUP_PAGING) {
-		/* Set up a page table */
 		struct prtb_entry {
 			__be64 prtb0;
 			__be64 prtb1;
-		} * process_tb;
-		unsigned long *pgd, *pud, *pmd, *pte, i;
+		}* process_tb = (struct prtb_entry*)(host_mem + gpa_off);
+
 		struct kvm_ppc_mmuv3_cfg cfg = {
 		    .flags = KVM_PPC_MMUV3_RADIX | KVM_PPC_MMUV3_GTSE,
-		    .process_table = gpa_off,
+		    .process_table = (gpa_off & PRTB_MASK) | (PRTB_SIZE_SHIFT - 12) | PATB_GR,
 		};
+		unsigned long process_tb_size = 1UL << (PRTB_SIZE_SHIFT + 4);
+		gpa_off += process_tb_size;
+		memset(process_tb, 0xcc, process_tb_size);
+
+		unsigned long *pgd, *pud, *pmd, *pte, i;
 		const long max_shift = 52;
 		const unsigned long rts = (((max_shift - 31) >> 3) << PPC_BITLSHIFT(2)) |
 					  (((max_shift - 31) & 7) << PPC_BITLSHIFT(58));
@@ -7427,9 +7521,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		regs.msr |= PPC_BIT(58) |
 			    PPC_BIT(59);
 
-		gpa_off += page_size;
-		process_tb = (struct prtb_entry*)(host_mem + gpa_off);
-		gpa_off += page_size;
+		process_tb[0].prtb0 = cpu_to_be64(rts | gpa_off | RADIX_PGD_INDEX_SIZE);
 		pgd = (unsigned long*)(host_mem + gpa_off);
 		gpa_off += page_size;
 		pud = (unsigned long*)(host_mem + gpa_off);
@@ -7437,15 +7529,12 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		pmd = (unsigned long*)(host_mem + gpa_off);
 		gpa_off += page_size;
 		pte = (unsigned long*)(host_mem + gpa_off);
-		for (i = 0; i < MAX(1, (text_size / page_size) >> RADIX_PTE_INDEX_SIZE); ++i)
-			gpa_off += page_size;
+		gpa_off += page_size;
 
-		memset(host_mem, 0, gpa_off);
-
-		regs.pc = gpa_off;
-
-		process_tb[0].prtb0 = cpu_to_be64(rts | (unsigned long)pgd | RADIX_PGD_INDEX_SIZE);
-
+		memset(pgd, 0, page_size);
+		memset(pud, 0, page_size);
+		memset(pmd, 0, page_size);
+		memset(pte, 0, page_size);
 		pgd[0] = cpu_to_be64(PPC_BIT(0) |
 				     ((unsigned long)pud & PPC_BITMASK(4, 55)) |
 				     RADIX_PUD_INDEX_SIZE);
@@ -7455,31 +7544,33 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		pmd[0] = cpu_to_be64(PPC_BIT(0) |
 				     ((unsigned long)pte & PPC_BITMASK(4, 55)) |
 				     RADIX_PTE_INDEX_SIZE);
-
-		for (i = 0; i < text_size / page_size; ++i, gpa_off += page_size) {
-			unsigned long *ptes, *ptep;
-
-			ptes = (unsigned long*)((char*)pte + (i >> RADIX_PTE_INDEX_SIZE) * page_size);
-
-			ptep = &ptes[i & ~(1UL << RADIX_PTE_INDEX_SIZE)];
-			*ptep = cpu_to_be64(PPC_BIT(0) |
-					    PPC_BIT(1) |
-					    (gpa_off & PPC_BITMASK(7, 51)) |
-					    PPC_BIT(61) |
-					    PPC_BIT(63));
-		}
+		for (i = 0; i < 24 /* vma[24] */; ++i)
+			pte[i] = cpu_to_be64(PPC_BIT(0) |
+					     PPC_BIT(1) |
+					     ((i * page_size) & PPC_BITMASK(7, 51)) |
+					     PPC_BIT(61) |
+					     PPC_BIT(63));
 
 		if (ioctl(vmfd, KVM_PPC_CONFIGURE_V3_MMU, &cfg))
+			return -1;
+
+		uint64_t lpcr = LPCR_UPRT | LPCR_HR;
+		if (kvmppc_set_one_reg(cpufd, KVM_REG_PPC_LPCR_64, &lpcr))
 			return -1;
 	}
 
 	memcpy(host_mem + gpa_off, text, text_size);
-	memcpy(host_mem + gpa_off + text_size, &debug_inst_opcode, sizeof(debug_inst_opcode));
-	text_size += sizeof(debug_inst_opcode);
+	regs.pc = gpa_off;
+
+	uintptr_t end_of_text = gpa_off + ((text_size + 3) & ~3);
+	memcpy(host_mem + end_of_text, &debug_inst_opcode, sizeof(debug_inst_opcode));
 	if (!(flags & KVM_SETUP_PPC64_LE)) {
 		uint32_t* p = (uint32_t*)(host_mem + gpa_off);
 
 		for (unsigned long i = 0; i < text_size / sizeof(*p); ++i)
+			p[i] = cpu_to_be32(p[i]);
+		p = (uint32_t*)host_mem;
+		for (unsigned long i = 0; i < 0x100 / sizeof(*p); ++i)
 			p[i] = cpu_to_be32(p[i]);
 	}
 
@@ -7505,6 +7596,19 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	kvmppc_define_rtas_kernel_token(vmfd, 2, "ibm,get-xive");
 	kvmppc_define_rtas_kernel_token(vmfd, 3, "ibm,int-on");
 	kvmppc_define_rtas_kernel_token(vmfd, 4, "ibm,int-off");
+
+#if 0
+	printf("+-+-+-+ (%u) %s %u: %08x %08x %08x %08x  %08x %08x %08x %08x\n",
+	       getpid(), __func__, __LINE__,
+	       ((uint32_t*)(host_mem + gpa_off))[0],
+	       ((uint32_t*)(host_mem + gpa_off))[1],
+	       ((uint32_t*)(host_mem + gpa_off))[2],
+	       ((uint32_t*)(host_mem + gpa_off))[3],
+	       ((uint32_t*)(host_mem + gpa_off))[4],
+	       ((uint32_t*)(host_mem + gpa_off))[5],
+	       ((uint32_t*)(host_mem + gpa_off))[6],
+	       ((uint32_t*)(host_mem + gpa_off))[7]);
+#endif
 
 	return 0;
 }
