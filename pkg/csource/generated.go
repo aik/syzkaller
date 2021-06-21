@@ -7319,6 +7319,8 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 
 #include "kvm_ppc64le.S.h"
 
+#undef DEBUG
+
 #define BOOK3S_INTERRUPT_SYSTEM_RESET 0x100
 #define BOOK3S_INTERRUPT_MACHINE_CHECK 0x200
 #define BOOK3S_INTERRUPT_DATA_STORAGE 0x300
@@ -7350,9 +7352,31 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 #define BITS_PER_LONG 64
 #define PPC_BITLSHIFT(be) (BITS_PER_LONG - 1 - (be))
 #define PPC_BIT(bit) (1ULL << PPC_BITLSHIFT(bit))
+#define PPC_BITMASK(bs, be) ((PPC_BIT(bs) - PPC_BIT(be)) | PPC_BIT(bs))
+
+#define RADIX_PTE_INDEX_SIZE 5
+#define RADIX_PMD_INDEX_SIZE 9
+#define RADIX_PUD_INDEX_SIZE 9
+#define RADIX_PGD_INDEX_SIZE 13
 
 #define cpu_to_be32(x) __builtin_bswap32(x)
+#define cpu_to_be64(x) __builtin_bswap64(x)
+#define be64_to_cpu(x) __builtin_bswap64(x)
+
 #define LPCR_ILE PPC_BIT(38)
+#define LPCR_UPRT PPC_BIT(41)
+#define LPCR_EVIRT PPC_BIT(42)
+#define LPCR_HR PPC_BIT(43)
+
+#define KVM_REG_PPC_LPCR_64 (KVM_REG_PPC | KVM_REG_SIZE_U64 | 0xb5)
+
+#define PRTB_SIZE_SHIFT 12
+#define PATB_GR (1UL << 63)
+#define PATB_HR (1UL << 63)
+#define PRTB_MASK 0x0ffffffffffff000UL
+
+#define ALIGNUP(p, q) ((void*)(((unsigned long)(p) + (q)-1) & ~((q)-1)))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 struct kvm_text {
 	uintptr_t typ;
@@ -7381,7 +7405,28 @@ static int kvm_vcpu_enable_cap(int cpufd, uint32_t capability)
 	};
 	return ioctl(cpufd, KVM_ENABLE_CAP, &cap);
 }
+
+static void dump_text(const char* mem, unsigned start, unsigned cw, uint32_t debug_inst_opcode)
+{
+#ifdef DEBUG
+	printf("Text @%x: ", start);
+
+	for (unsigned i = 0; i < cw; ++i) {
+		uint32_t w = ((uint32_t*)(mem + start))[i];
+
+		printf(" %08x", w);
+		if (debug_inst_opcode && debug_inst_opcode == w)
+			break;
+	}
+
+	printf("\n");
+#endif
+}
 #define KVM_SETUP_PPC64_LE (1 << 0)
+#define KVM_SETUP_PPC64_IR (1 << 1)
+#define KVM_SETUP_PPC64_DR (1 << 2)
+#define KVM_SETUP_PPC64_PR (1 << 3)
+#define KVM_SETUP_PPC64_PID1 (1 << 4)
 static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long a2, volatile long a3, volatile long a4, volatile long a5, volatile long a6, volatile long a7)
 {
 	const int vmfd = a0;
@@ -7398,6 +7443,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	(void)text_count;
 	const void* text = 0;
 	uintptr_t text_size = 0;
+	uint64_t pid = 0;
 	uint64_t lpcr = 0;
 	NONFAILING(text = text_array_ptr[0].text);
 	NONFAILING(text_size = text_array_ptr[0].size);
@@ -7427,6 +7473,17 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	regs.msr = PPC_BIT(0);
 	if (flags & KVM_SETUP_PPC64_LE)
 		regs.msr |= PPC_BIT(63);
+	if (flags & KVM_SETUP_PPC64_PR) {
+		regs.msr |= PPC_BIT(49);
+		flags |= KVM_SETUP_PPC64_IR | KVM_SETUP_PPC64_DR | KVM_SETUP_PPC64_PID1;
+	}
+
+	if (flags & KVM_SETUP_PPC64_IR)
+		regs.msr |= PPC_BIT(58);
+	if (flags & KVM_SETUP_PPC64_DR)
+		regs.msr |= PPC_BIT(59);
+	if (flags & KVM_SETUP_PPC64_PID1)
+		pid = 1;
 	if (kvmppc_get_one_reg(cpufd, KVM_REG_PPC_DEBUG_INST, &debug_inst_opcode))
 		return -1;
 
@@ -7466,6 +7523,83 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (ioctl(cpufd, KVM_SET_GUEST_DEBUG, &dbg))
 		return -1;
 	gpa_off = 128 << 10;
+	if (flags & (KVM_SETUP_PPC64_IR | KVM_SETUP_PPC64_DR)) {
+		uintptr_t process_tb_off = gpa_off;
+		unsigned long process_tb_size = 1UL << (PRTB_SIZE_SHIFT + 4);
+		struct prtb_entry {
+			__be64 prtb0;
+			__be64 prtb1;
+		}* process_tb = (struct prtb_entry*)(host_mem + gpa_off);
+
+		memset(process_tb, 0xcc, process_tb_size);
+		gpa_off += process_tb_size;
+
+		unsigned long *pgd, *pud, *pmd, *pte, i;
+		uintptr_t pgd_off = gpa_off;
+		pgd = (unsigned long*)(host_mem + pgd_off);
+		gpa_off += page_size;
+		uintptr_t pud_off = gpa_off;
+		pud = (unsigned long*)(host_mem + pud_off);
+		gpa_off += page_size;
+		uintptr_t pmd_off = gpa_off;
+		pmd = (unsigned long*)(host_mem + pmd_off);
+		gpa_off += page_size;
+		uintptr_t pte_off = gpa_off;
+		pte = (unsigned long*)(host_mem + pte_off);
+		gpa_off += page_size;
+
+		memset(pgd, 0, page_size);
+		memset(pud, 0, page_size);
+		memset(pmd, 0, page_size);
+		memset(pte, 0, page_size);
+		pgd[0] = cpu_to_be64(PPC_BIT(0) |
+				     (pud_off & PPC_BITMASK(4, 55)) |
+				     RADIX_PUD_INDEX_SIZE);
+		pud[0] = cpu_to_be64(PPC_BIT(0) |
+				     (pmd_off & PPC_BITMASK(4, 55)) |
+				     RADIX_PMD_INDEX_SIZE);
+		pmd[0] = cpu_to_be64(PPC_BIT(0) |
+				     (pte_off & PPC_BITMASK(4, 55)) |
+				     RADIX_PTE_INDEX_SIZE);
+		for (i = 0; i < 24 /* vma[24] */; ++i)
+			pte[i] = cpu_to_be64(PPC_BIT(0) |
+					     PPC_BIT(1) |
+					     ((i * page_size) & PPC_BITMASK(7, 51)) |
+					     PPC_BIT(55) |
+					     PPC_BIT(56) |
+					     PPC_BIT(61) |
+					     PPC_BIT(62) |
+					     PPC_BIT(63));
+
+		const long max_shift = 52;
+		const unsigned long rts = (max_shift - 31) & 0x1f;
+		const unsigned long rts1 = (rts >> 3) << PPC_BITLSHIFT(2);
+		const unsigned long rts2 = (rts & 7) << PPC_BITLSHIFT(58);
+
+		process_tb[0].prtb0 = cpu_to_be64(PATB_HR | rts1 | pgd_off | rts2 | RADIX_PGD_INDEX_SIZE);
+		if (pid)
+			process_tb[pid].prtb0 = cpu_to_be64(PATB_HR | rts1 | pgd_off | rts2 | RADIX_PGD_INDEX_SIZE);
+		struct kvm_ppc_mmuv3_cfg cfg = {
+		    .flags = KVM_PPC_MMUV3_RADIX | KVM_PPC_MMUV3_GTSE,
+		    .process_table = (process_tb_off & PRTB_MASK) | (PRTB_SIZE_SHIFT - 12) | PATB_GR,
+		};
+		if (ioctl(vmfd, KVM_PPC_CONFIGURE_V3_MMU, &cfg))
+			return -1;
+
+		lpcr |= LPCR_UPRT | LPCR_HR;
+#ifdef DEBUG
+		printf("MMUv3: flags=%lx %016lx\n", cfg.flags, cfg.process_table);
+		printf("PTRB0=%016lx PGD0=%016lx PUD0=%016lx PMD0=%016lx\n",
+		       be64_to_cpu((unsigned long)process_tb[0].prtb0), be64_to_cpu((unsigned long)pgd[0]),
+		       be64_to_cpu((unsigned long)pud[0]), be64_to_cpu((unsigned long)pmd[0]));
+		printf("PTEs @%lx:\n  %016lx %016lx %016lx %016lx\n  %016lx %016lx %016lx %016lx\n",
+		       pte_off,
+		       be64_to_cpu((unsigned long)pte[0]), be64_to_cpu((unsigned long)pte[1]),
+		       be64_to_cpu((unsigned long)pte[2]), be64_to_cpu((unsigned long)pte[3]),
+		       be64_to_cpu((unsigned long)pte[4]), be64_to_cpu((unsigned long)pte[5]),
+		       be64_to_cpu((unsigned long)pte[6]), be64_to_cpu((unsigned long)pte[7]));
+#endif
+	}
 
 	memcpy(host_mem + gpa_off, text, text_size);
 	regs.pc = gpa_off;
@@ -7490,6 +7624,8 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		return -1;
 	if (kvmppc_set_one_reg(cpufd, KVM_REG_PPC_LPCR_64, &lpcr))
 		return -1;
+	if (kvmppc_set_one_reg(cpufd, KVM_REG_PPC_PID, &pid))
+		return -1;
 #define MAX_HCALL 0x450
 	for (unsigned hcall = 4; hcall < MAX_HCALL; hcall += 4) {
 		struct kvm_enable_cap cap = {
@@ -7499,6 +7635,9 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 		};
 		ioctl(vmfd, KVM_ENABLE_CAP, &cap);
 	}
+
+	dump_text(host_mem, regs.pc, 8, debug_inst_opcode);
+	dump_text(host_mem, BOOK3S_INTERRUPT_DECREMENTER, 16, debug_inst_opcode);
 
 	uint64_t decr = 0x7fffffff;
 	if (kvmppc_set_one_reg(cpufd, KVM_REG_PPC_DEC_EXPIRY, &decr))
