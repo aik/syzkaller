@@ -40,6 +40,7 @@ func main() {
 		"common_usb.h",
 		"android/android_seccomp.h",
 		"kvm.h",
+		"kvm_ppc64le.S.h",
 		"kvm.S.h",
 	}
 	data = replaceIncludes(executorFilenames, "../../executor/", data)

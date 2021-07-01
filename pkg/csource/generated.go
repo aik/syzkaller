@@ -7241,83 +7241,10 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 }
 
 #elif GOARCH_ppc64 || GOARCH_ppc64le
+const char kvm_ppc64_mr[] = "\x00\x00\xa0\x3c\x00\x00\xa5\x60\xc6\x07\xa5\x78\xad\x0b\xa5\x64\xde\xc0\xa5\x60\x78\x2b\xa4\x7c\x78\x23\x83\x7c";
+const char kvm_ppc64_ld[] = "\x00\x00\xe0\x3d\x00\x00\xef\x61\xc6\x07\xef\x79\xad\x0b\xef\x65\xde\xc0\xef\x61\x00\x00\x20\x3f\x00\x00\x39\x63\xc6\x07\x39\x7b\x17\x00\x39\x67\xf8\xff\x39\x63\x00\x00\xf9\xf9\x00\x00\x79\xe8";
+const char kvm_ppc64_recharge_dec[] = "\x00\x00\x80\x3e\x00\x00\x94\x62\xc6\x07\x94\x7a\xff\x07\x94\x66\xff\xff\x94\x62\xa6\x03\x96\x7e\x24\x00\x00\x4c";
 
-#define ADDR_TEXT 0x0000
-#define ADDR_GDT 0x1000
-#define ADDR_LDT 0x1800
-#define ADDR_PML4 0x2000
-#define ADDR_PDP 0x3000
-#define ADDR_PD 0x4000
-#define ADDR_STACK0 0x0f80
-#define ADDR_VAR_HLT 0x2800
-#define ADDR_VAR_SYSRET 0x2808
-#define ADDR_VAR_SYSEXIT 0x2810
-#define ADDR_VAR_IDT 0x3800
-#define ADDR_VAR_TSS64 0x3a00
-#define ADDR_VAR_TSS64_CPL3 0x3c00
-#define ADDR_VAR_TSS16 0x3d00
-#define ADDR_VAR_TSS16_2 0x3e00
-#define ADDR_VAR_TSS16_CPL3 0x3f00
-#define ADDR_VAR_TSS32 0x4800
-#define ADDR_VAR_TSS32_2 0x4a00
-#define ADDR_VAR_TSS32_CPL3 0x4c00
-#define ADDR_VAR_TSS32_VM86 0x4e00
-#define ADDR_VAR_VMXON_PTR 0x5f00
-#define ADDR_VAR_VMCS_PTR 0x5f08
-#define ADDR_VAR_VMEXIT_PTR 0x5f10
-#define ADDR_VAR_VMWRITE_FLD 0x5f18
-#define ADDR_VAR_VMWRITE_VAL 0x5f20
-#define ADDR_VAR_VMXON 0x6000
-#define ADDR_VAR_VMCS 0x7000
-#define ADDR_VAR_VMEXIT_CODE 0x9000
-#define ADDR_VAR_USER_CODE 0x9100
-#define ADDR_VAR_USER_CODE2 0x9120
-
-#define SEL_LDT (1 << 3)
-#define SEL_CS16 (2 << 3)
-#define SEL_DS16 (3 << 3)
-#define SEL_CS16_CPL3 ((4 << 3) + 3)
-#define SEL_DS16_CPL3 ((5 << 3) + 3)
-#define SEL_CS32 (6 << 3)
-#define SEL_DS32 (7 << 3)
-#define SEL_CS32_CPL3 ((8 << 3) + 3)
-#define SEL_DS32_CPL3 ((9 << 3) + 3)
-#define SEL_CS64 (10 << 3)
-#define SEL_DS64 (11 << 3)
-#define SEL_CS64_CPL3 ((12 << 3) + 3)
-#define SEL_DS64_CPL3 ((13 << 3) + 3)
-#define SEL_CGATE16 (14 << 3)
-#define SEL_TGATE16 (15 << 3)
-#define SEL_CGATE32 (16 << 3)
-#define SEL_TGATE32 (17 << 3)
-#define SEL_CGATE64 (18 << 3)
-#define SEL_CGATE64_HI (19 << 3)
-#define SEL_TSS16 (20 << 3)
-#define SEL_TSS16_2 (21 << 3)
-#define SEL_TSS16_CPL3 ((22 << 3) + 3)
-#define SEL_TSS32 (23 << 3)
-#define SEL_TSS32_2 (24 << 3)
-#define SEL_TSS32_CPL3 ((25 << 3) + 3)
-#define SEL_TSS32_VM86 (26 << 3)
-#define SEL_TSS64 (27 << 3)
-#define SEL_TSS64_HI (28 << 3)
-#define SEL_TSS64_CPL3 ((29 << 3) + 3)
-#define SEL_TSS64_CPL3_HI (30 << 3)
-
-#define MSR_IA32_FEATURE_CONTROL 0x3a
-#define MSR_IA32_VMX_BASIC 0x480
-#define MSR_IA32_SMBASE 0x9e
-#define MSR_IA32_SYSENTER_CS 0x174
-#define MSR_IA32_SYSENTER_ESP 0x175
-#define MSR_IA32_SYSENTER_EIP 0x176
-#define MSR_IA32_STAR 0xC0000081
-#define MSR_IA32_LSTAR 0xC0000082
-#define MSR_IA32_VMX_PROCBASED_CTLS2 0x48B
-
-#define NEXT_INSN $0xbadc0de
-#define PREFIX_SIZE 0xba1d
-
-#include "kvm_ppc64le.S.h"
 
 #undef DEBUG
 
@@ -7394,21 +7321,21 @@ static int kvmppc_define_rtas_kernel_token(int vmfd, unsigned token, const char*
 	return ioctl(vmfd, KVM_PPC_RTAS_DEFINE_TOKEN, &args);
 }
 
-static int kvmppc_get_one_reg(int cpufd, uint64_t id, void* target)
+static int kvmppc_get_one_reg(int cpufd, uint64 id, void* target)
 {
 	struct kvm_one_reg reg = {.id = id, .addr = (uintptr_t)target};
 
 	return ioctl(cpufd, KVM_GET_ONE_REG, &reg);
 }
 
-static int kvmppc_set_one_reg(int cpufd, uint64_t id, void* target)
+static int kvmppc_set_one_reg(int cpufd, uint64 id, void* target)
 {
 	struct kvm_one_reg reg = {.id = id, .addr = (uintptr_t)target};
 
 	return ioctl(cpufd, KVM_SET_ONE_REG, &reg);
 }
 
-static int kvm_vcpu_enable_cap(int cpufd, uint32_t capability)
+static int kvm_vcpu_enable_cap(int cpufd, uint32 capability)
 {
 	struct kvm_enable_cap cap = {
 	    .cap = capability,
@@ -7416,13 +7343,13 @@ static int kvm_vcpu_enable_cap(int cpufd, uint32_t capability)
 	return ioctl(cpufd, KVM_ENABLE_CAP, &cap);
 }
 
-static void dump_text(const char* mem, unsigned start, unsigned cw, uint32_t debug_inst_opcode)
+static void dump_text(const char* mem, unsigned start, unsigned cw, uint32 debug_inst_opcode)
 {
 #ifdef DEBUG
 	printf("Text @%x: ", start);
 
 	for (unsigned i = 0; i < cw; ++i) {
-		uint32_t w = ((uint32_t*)(mem + start))[i];
+		uint32 w = ((uint32*)(mem + start))[i];
 
 		printf(" %08x", w);
 		if (debug_inst_opcode && debug_inst_opcode == w)
@@ -7445,16 +7372,16 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	const struct kvm_text* const text_array_ptr = (struct kvm_text*)a3;
 	const uintptr_t text_count = a4;
 	uintptr_t flags = a5;
-	const uintptr_t page_size = SYZ_PAGE_SIZE;
+	const uintptr_t page_size = 0x10000;
 	const uintptr_t guest_mem_size = 24 * page_size;
 	unsigned long gpa_off = 0;
-	uint32_t debug_inst_opcode = 0;
+	uint32 debug_inst_opcode = 0;
 
 	(void)text_count;
 	const void* text = 0;
 	uintptr_t text_size = 0;
-	uint64_t pid = 0;
-	uint64_t lpcr = 0;
+	uint64 pid = 0;
+	uint64 lpcr = 0;
 	NONFAILING(text = text_array_ptr[0].text);
 	NONFAILING(text_size = text_array_ptr[0].size);
 
@@ -7497,7 +7424,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (kvmppc_get_one_reg(cpufd, KVM_REG_PPC_DEBUG_INST, &debug_inst_opcode))
 		return -1;
 
-#define VEC(x) (*((uint32_t*)(host_mem + (x))))
+#define VEC(x) (*((uint32*)(host_mem + (x))))
 	VEC(BOOK3S_INTERRUPT_SYSTEM_RESET) = debug_inst_opcode;
 	VEC(BOOK3S_INTERRUPT_MACHINE_CHECK) = debug_inst_opcode;
 	VEC(BOOK3S_INTERRUPT_DATA_STORAGE) = debug_inst_opcode;
@@ -7617,11 +7544,11 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	uintptr_t end_of_text = gpa_off + ((text_size + 3) & ~3);
 	memcpy(host_mem + end_of_text, &debug_inst_opcode, sizeof(debug_inst_opcode));
 	if (!(flags & KVM_SETUP_PPC64_LE)) {
-		uint32_t* p = (uint32_t*)(host_mem + gpa_off);
+		uint32* p = (uint32*)(host_mem + gpa_off);
 		for (unsigned long i = 0; i < text_size / sizeof(*p); ++i)
 			p[i] = cpu_to_be32(p[i]);
 
-		p = (uint32_t*)(host_mem + BOOK3S_INTERRUPT_DECREMENTER);
+		p = (uint32*)(host_mem + BOOK3S_INTERRUPT_DECREMENTER);
 		for (unsigned long i = 0; i < sizeof(kvm_ppc64_recharge_dec) / sizeof(*p); ++i)
 			p[i] = cpu_to_be32(p[i]);
 	} else {
@@ -7658,11 +7585,11 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	dump_text(host_mem, regs.pc, 8, debug_inst_opcode);
 	dump_text(host_mem, BOOK3S_INTERRUPT_DECREMENTER, 16, debug_inst_opcode);
 
-	uint64_t decr = 0x7fffffff;
+	uint64 decr = 0x7fffffff;
 	if (kvmppc_set_one_reg(cpufd, KVM_REG_PPC_DEC_EXPIRY, &decr))
 		return -1;
 
-	return 0;
+	return cpufd;
 }
 
 #elif !GOARCH_arm

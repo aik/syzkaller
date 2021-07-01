@@ -7,7 +7,6 @@
 // See Intel Software Developer’s Manual Volume 3: System Programming Guide
 // for details on what happens here.
 
-#include "kvm.h"
 #include "kvm_ppc64le.S.h"
 
 #undef DEBUG
@@ -85,21 +84,21 @@ static int kvmppc_define_rtas_kernel_token(int vmfd, unsigned token, const char*
 	return ioctl(vmfd, KVM_PPC_RTAS_DEFINE_TOKEN, &args);
 }
 
-static int kvmppc_get_one_reg(int cpufd, uint64_t id, void* target)
+static int kvmppc_get_one_reg(int cpufd, uint64 id, void* target)
 {
 	struct kvm_one_reg reg = {.id = id, .addr = (uintptr_t)target};
 
 	return ioctl(cpufd, KVM_GET_ONE_REG, &reg);
 }
 
-static int kvmppc_set_one_reg(int cpufd, uint64_t id, void* target)
+static int kvmppc_set_one_reg(int cpufd, uint64 id, void* target)
 {
 	struct kvm_one_reg reg = {.id = id, .addr = (uintptr_t)target};
 
 	return ioctl(cpufd, KVM_SET_ONE_REG, &reg);
 }
 
-static int kvm_vcpu_enable_cap(int cpufd, uint32_t capability)
+static int kvm_vcpu_enable_cap(int cpufd, uint32 capability)
 {
 	struct kvm_enable_cap cap = {
 	    .cap = capability,
@@ -107,13 +106,13 @@ static int kvm_vcpu_enable_cap(int cpufd, uint32_t capability)
 	return ioctl(cpufd, KVM_ENABLE_CAP, &cap);
 }
 
-static void dump_text(const char* mem, unsigned start, unsigned cw, uint32_t debug_inst_opcode)
+static void dump_text(const char* mem, unsigned start, unsigned cw, uint32 debug_inst_opcode)
 {
 #ifdef DEBUG
 	printf("Text @%x: ", start);
 
 	for (unsigned i = 0; i < cw; ++i) {
-		uint32_t w = ((uint32_t*)(mem + start))[i];
+		uint32 w = ((uint32*)(mem + start))[i];
 
 		printf(" %08x", w);
 		if (debug_inst_opcode && debug_inst_opcode == w)
@@ -140,16 +139,16 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	const struct kvm_text* const text_array_ptr = (struct kvm_text*)a3;
 	const uintptr_t text_count = a4;
 	uintptr_t flags = a5;
-	const uintptr_t page_size = SYZ_PAGE_SIZE;
+	const uintptr_t page_size = 0x10000; //SYZ_PAGE_SIZE;
 	const uintptr_t guest_mem_size = 24 * page_size; // vma[24] from dev_kvm.txt
 	unsigned long gpa_off = 0;
-	uint32_t debug_inst_opcode = 0;
+	uint32 debug_inst_opcode = 0;
 
 	(void)text_count; // fuzzer can spoof count and we need just 1 text, so ignore text_count
 	const void* text = 0;
 	uintptr_t text_size = 0;
-	uint64_t pid = 0;
-	uint64_t lpcr = 0;
+	uint64 pid = 0;
+	uint64 lpcr = 0;
 	NONFAILING(text = text_array_ptr[0].text);
 	NONFAILING(text_size = text_array_ptr[0].size);
 
@@ -199,7 +198,7 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	if (kvmppc_get_one_reg(cpufd, KVM_REG_PPC_DEBUG_INST, &debug_inst_opcode))
 		return -1;
 
-#define VEC(x) (*((uint32_t*)(host_mem + (x))))
+#define VEC(x) (*((uint32*)(host_mem + (x))))
 	VEC(BOOK3S_INTERRUPT_SYSTEM_RESET) = debug_inst_opcode;
 	VEC(BOOK3S_INTERRUPT_MACHINE_CHECK) = debug_inst_opcode;
 	VEC(BOOK3S_INTERRUPT_DATA_STORAGE) = debug_inst_opcode;
@@ -335,11 +334,11 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 
 	// The code generator produces little endian instructions so swap bytes here
 	if (!(flags & KVM_SETUP_PPC64_LE)) {
-		uint32_t* p = (uint32_t*)(host_mem + gpa_off);
+		uint32* p = (uint32*)(host_mem + gpa_off);
 		for (unsigned long i = 0; i < text_size / sizeof(*p); ++i)
 			p[i] = cpu_to_be32(p[i]);
 
-		p = (uint32_t*)(host_mem + BOOK3S_INTERRUPT_DECREMENTER);
+		p = (uint32*)(host_mem + BOOK3S_INTERRUPT_DECREMENTER);
 		for (unsigned long i = 0; i < sizeof(kvm_ppc64_recharge_dec) / sizeof(*p); ++i)
 			p[i] = cpu_to_be32(p[i]);
 	} else {
@@ -380,9 +379,9 @@ static long syz_kvm_setup_cpu(volatile long a0, volatile long a1, volatile long 
 	dump_text(host_mem, regs.pc, 8, debug_inst_opcode);
 	dump_text(host_mem, BOOK3S_INTERRUPT_DECREMENTER, 16, debug_inst_opcode);
 
-	uint64_t decr = 0x7fffffff;
+	uint64 decr = 0x7fffffff;
 	if (kvmppc_set_one_reg(cpufd, KVM_REG_PPC_DEC_EXPIRY, &decr))
 		return -1;
 
-	return 0;
+	return cpufd;
 }
